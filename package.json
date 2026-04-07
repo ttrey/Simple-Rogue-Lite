@@ -1,0 +1,41 @@
+{
+  "name": "shadow-dungeon-desktop",
+  "version": "1.0.0",
+  "description": "Electron desktop wrapper for Shadow Dungeon",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "bundle": "node scripts/bundle.js",
+    "start": "npm run bundle && electron .",
+    "build:win": "npm run bundle && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.treym.shadowdungeon",
+    "productName": "Shadow Dungeon",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "index.html",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "ShadowDungeon-${version}.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.25.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}
