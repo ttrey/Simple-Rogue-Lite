@@ -258,13 +258,97 @@ const TRAITS = [
   { name:"Thick Skin", desc:"Reduce all damage taken by 10%", effect:"dmgReduce10" },
 ];
 
+const BIOME_BY_FLOOR = [
+  { key:"crypt", name:"Whispering Crypt", floors:[1,2,3,4] },
+  { key:"thicket", name:"Withered Thicket", floors:[5,6,7,8] },
+  { key:"forge", name:"Ashen Forge", floors:[9,10,11,12] },
+  { key:"rift", name:"Rift Veins", floors:[13,14,15,16] },
+];
+
+const EVENT_DEFINITIONS = [
+  {
+    id:"relic_bargain",
+    name:"Reliquary of Ash",
+    icon:"🗿",
+    desc:"An obsidian reliquary hums. Power answers sacrifice.",
+    baseWeight:11,
+    biomeWeights:{ forge:1.6, rift:1.25 },
+    minFloor:2,
+    options:[
+      { id:"offer_blood", label:"Offer Blood", preview:"Lose 18% max HP. Gain a relic.", outcomes:[{ weight:100, effects:[{ type:"loseHpPct", value:18 }, { type:"gainRelic", rarity:"legendary" }] }] },
+      { id:"observe", label:"Walk Away", preview:"No cost. No reward.", outcomes:[{ weight:100, effects:[{ type:"log", text:"You leave the reliquary untouched." }] }] },
+    ],
+  },
+  {
+    id:"coin_well",
+    name:"Wishing Well",
+    icon:"🪙",
+    desc:"Coins vanish in the water, and fate shifts beneath the surface.",
+    baseWeight:14,
+    biomeWeights:{ crypt:1.3, thicket:1.2 },
+    options:[
+      { id:"gamble_small", label:"Toss 30g", preview:"30g risk. 45% jackpot, 35% refund, 20% bust.", condition:ctx=>ctx.player.gold>=30, outcomes:[
+        { weight:45, effects:[{ type:"spendGold", value:30 }, { type:"gainGold", value:95 }, { type:"log", text:"The well erupts with coin." }] },
+        { weight:35, effects:[{ type:"spendGold", value:30 }, { type:"gainGold", value:30 }, { type:"log", text:"The well spits your coin back." }] },
+        { weight:20, effects:[{ type:"spendGold", value:30 }, { type:"log", text:"The well swallows your offering." }] },
+      ]},
+      { id:"gamble_big", label:"Toss 70g", preview:"70g risk. 30% relic, 40% rich return, 30% bust.", condition:ctx=>ctx.player.gold>=70, outcomes:[
+        { weight:30, effects:[{ type:"spendGold", value:70 }, { type:"gainRelic", rarity:"mythic" }, { type:"log", text:"A relic rises from the depths!" }] },
+        { weight:40, effects:[{ type:"spendGold", value:70 }, { type:"gainGold", value:165 }] },
+        { weight:30, effects:[{ type:"spendGold", value:70 }, { type:"loseHpPct", value:10 }] },
+      ]},
+      { id:"leave", label:"Keep Your Gold", preview:"No changes.", outcomes:[{ weight:100, effects:[{ type:"log", text:"You choose certainty over greed." }] }] },
+    ],
+  },
+  {
+    id:"purging_flame",
+    name:"Purging Flame",
+    icon:"🔥",
+    desc:"A ritual pyre can burn away one burdening trait.",
+    baseWeight:9,
+    biomeWeights:{ forge:1.4 },
+    minFloor:4,
+    options:[
+      { id:"purge_trait", label:"Burn a Trait", preview:"Remove 1 random trait. Gain +1 skill point.", condition:ctx=>(ctx.player.traits||[]).length>0, outcomes:[{ weight:100, effects:[{ type:"removeTrait" }, { type:"gainSkillPoint", value:1 }] }] },
+      { id:"meditate", label:"Meditate", preview:"Restore 20% HP and 20% MP.", outcomes:[{ weight:100, effects:[{ type:"healHpPct", value:20 }, { type:"healMpPct", value:20 }] }] },
+    ],
+  },
+  {
+    id:"battle_manuals",
+    name:"Forgotten Manuals",
+    icon:"📘",
+    desc:"Tattered manuals outline impossible techniques.",
+    baseWeight:13,
+    biomeWeights:{ crypt:0.85, thicket:1.3, rift:1.35 },
+    options:[
+      { id:"focus_upgrade", label:"Focus Drill", preview:"Upgrade one random skill by 1 level.", condition:ctx=>(ctx.player.skills||[]).length>0, outcomes:[{ weight:100, effects:[{ type:"upgradeSkill", levels:1 }] }] },
+      { id:"take_notes", label:"Take Notes", preview:"All skills gain 35% of XP requirement.", condition:ctx=>(ctx.player.skills||[]).length>0, outcomes:[{ weight:100, effects:[{ type:"trainAllSkillsPct", value:35 }] }] },
+      { id:"ignore", label:"Ignore", preview:"No changes.", outcomes:[{ weight:100, effects:[{ type:"log", text:"The manuals remain unread." }] }] },
+    ],
+  },
+];
+
 // ─── UTILITY ────────────────────────────────────────────────────────────
 const rng = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 const chance = p => Math.random() * 100 < p;
 const pick = a => a[rng(0, a.length - 1)];
+const weightedPick = (entries = []) => {
+  const total = entries.reduce((sum, entry) => sum + Math.max(0, entry.weight || 0), 0);
+  if (total <= 0) return entries[0] || null;
+  let roll = Math.random() * total;
+  for (const entry of entries) {
+    roll -= Math.max(0, entry.weight || 0);
+    if (roll <= 0) return entry;
+  }
+  return entries[entries.length - 1] || null;
+};
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const uid = () => Math.random().toString(36).slice(2, 9);
 const SET_EFFECT_FIELDS = ["str","agi","int","vit","luk","atkFlat","defFlat","magicFlat","critChance","dodgeChance","lifestealPct","manaRegenVal","cdReduction","fireAmp","iceAmp","thornsPct","maxHpPct","maxMpPct","damagePct","bossDamagePct"];
+
+function getBiomeForFloor(floor = 1) {
+  return BIOME_BY_FLOOR.find(biome => biome.floors.includes(((floor - 1) % 16) + 1)) || BIOME_BY_FLOOR[0];
+}
 
 function rollRarity(luck = 0) {
   const adj = RARITY_WEIGHTS.map(r => r.r === "common" ? { ...r, w: Math.max(5, r.w - luck * 2) } : { ...r, w: r.w + (r.r !== "uncommon" ? luck * 0.5 : luck * 0.3) });
@@ -540,6 +624,7 @@ export default function Game(){
   const[shopItems,setShopItems]=useState([]);
   const[shopConsumables,setShopConsumables]=useState([]);
   const[eventData,setEventData]=useState(null);
+  const[mapNodes,setMapNodes]=useState([]);
   const[metaUnlocks,setMetaUnlocks]=useState(()=>{try{return JSON.parse(localStorage.getItem("rl_meta")||"{}");}catch{return{};}});
   const[skillCooldowns,setSkillCooldowns]=useState({});
   const[runs,setRuns]=useState(()=>{try{return parseInt(localStorage.getItem("rl_runs")||"0");}catch{return 0;}});
@@ -550,6 +635,11 @@ export default function Game(){
   const[skillChoiceQueue,setSkillChoiceQueue]=useState([]);
 
   useEffect(()=>{if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;},[log]);
+  useEffect(()=>{
+    if(phase!=="explore"||!player)return;
+    if(mapNodes.length>0)return;
+    setMapNodes(rollMapNodes(encounter+1));
+  },[phase,player,encounter,mapNodes.length]);
   const addLog=useCallback((msg,type="info")=>{setLog(prev=>[...prev.slice(-80),{msg,type,id:uid()}]);},[]);
   const stats=useMemo(()=>player?calcPlayerStats(player):null,[player]);
 
@@ -564,7 +654,7 @@ export default function Game(){
     if(metaUnlocks.startGold)p.gold+=metaUnlocks.startGold;
     const s=calcPlayerStats(p);p.hp=s.maxHp;p.mp=s.maxMp;
     p.equipment.weapon={id:uid(),name:"Rusty Shortsword",type:"weapon",slot:"weapon",icon:"🗡️",rarity:"common",rarityColor:RARITY.common.color,rarityName:"Common",atk:4,def:0,magic:0,bonusStats:{},uniqueEffect:null};
-    setPlayer(p);setFloor(1);setEncounter(0);setBossCount(0);setBossHistory([]);setLog([]);setSkillCooldowns({});setCombatTurn(0);setParrying(false);setDefending(false);setBerserkTurns(0);setSmokeTurns(0);setShieldHp(0);setFamiliarHp(0);setPotionUsedThisTurn(false);setSkillChoiceQueue([]);
+    setPlayer(p);setFloor(1);setEncounter(0);setBossCount(0);setBossHistory([]);setLog([]);setSkillCooldowns({});setCombatTurn(0);setParrying(false);setDefending(false);setBerserkTurns(0);setSmokeTurns(0);setShieldHp(0);setFamiliarHp(0);setPotionUsedThisTurn(false);setSkillChoiceQueue([]);setMapNodes([]);
     addLog("⚔️ A new hunter awakens. No class — forge your own path.","system");
     addLog("📌 You have 5 stat points to allocate. Shape your build!","system");
     addLog("The dungeon gates open before you...","narrative");
@@ -592,82 +682,142 @@ export default function Game(){
     addLog(`💰 Sold ${item.icon} ${item.name} for ${price} gold.`,"gold");
   }
 
-  function nextEncounter(){
+  function generateRelic(lvl, luck, rarity = "legendary") {
+    const relic = generateItem(lvl, luck + 14, rarity, { forceSet:false, setChanceBonus:20 });
+    relic.name = `${relic.name} Relic`;
+    relic.type = "relic";
+    relic.slot = "accessory1";
+    return relic;
+  }
+
+  function rollMapNodes(nextEncounterCount) {
+    const forceBoss = nextEncounterCount % 7 === 0;
+    if (forceBoss) return [{ id:uid(), type:"boss", icon:"👑", label:"Boss Lair", preview:"Mandatory boss fight." }];
+    const pool = [
+      { type:"combat", icon:"⚔️", label:"Battle", weight:54 },
+      { type:"event", icon:"❓", label:"Event", weight:26 + Math.min(10, Math.floor(nextEncounterCount / 3)) },
+      { type:"merchant", icon:"🏪", label:"Merchant", weight:12 },
+      { type:"rest", icon:"🏕️", label:"Camp", weight:16 },
+    ];
+    const options = [];
+    for (let i = 0; i < 3; i++) {
+      const rolled = weightedPick(pool.map(entry => ({ ...entry, weight: Math.max(1, entry.weight - (options.find(o => o.type === entry.type) ? 10 : 0)) })));
+      options.push({ id:uid(), ...rolled, preview:rolled.type === "event" ? "Weighted event outcome." : rolled.type === "merchant" ? "Open shop inventory." : rolled.type === "rest" ? "Recover HP/MP." : "Start standard encounter." });
+    }
+    return options;
+  }
+
+  function triggerRandomEvent(forcedId = null){
+    const biome = getBiomeForFloor(floor);
+    const weightedEvents = EVENT_DEFINITIONS
+      .filter(def => !def.minFloor || floor >= def.minFloor)
+      .map(def => ({ def, weight: Math.max(1, Math.round(def.baseWeight * (def.biomeWeights?.[biome.key] || 1) * (def.floorScale ? def.floorScale(floor) : 1))) }));
+    const chosen = forcedId ? EVENT_DEFINITIONS.find(def => def.id === forcedId) : weightedPick(weightedEvents)?.def;
+    if(!chosen)return;
+    const ctx = { player, floor, biome };
+    const options = chosen.options.map(option => ({ ...option, disabled: option.condition ? !option.condition(ctx) : false }));
+    const ev = { ...chosen, options, biome };
+    setEventData(ev);
+    addLog(`\n${ev.icon} ${ev.name} [${biome.name}]`,"event");
+    addLog(`   ${ev.desc}`,"event");
+    setPhase("event");
+  }
+
+  function applyEventEffect(effect, p, s, resolvedLogs){
+    if (!effect) return;
+    if (effect.type === "loseHpPct") {
+      const value = Math.max(1, Math.round(s.maxHp * (effect.value / 100)));
+      p.hp = Math.max(1, p.hp - value);
+      resolvedLogs.push(`💥 -${value} HP`);
+    } else if (effect.type === "healHpPct") {
+      const value = Math.max(1, Math.round(s.maxHp * (effect.value / 100)));
+      p.hp = Math.min(s.maxHp, p.hp + value);
+      resolvedLogs.push(`💚 +${value} HP`);
+    } else if (effect.type === "healMpPct") {
+      const value = Math.max(1, Math.round(s.maxMp * (effect.value / 100)));
+      p.mp = Math.min(s.maxMp, p.mp + value);
+      resolvedLogs.push(`💧 +${value} MP`);
+    } else if (effect.type === "spendGold") {
+      p.gold = Math.max(0, p.gold - (effect.value || 0));
+      resolvedLogs.push(`💰 -${effect.value}g`);
+    } else if (effect.type === "gainGold") {
+      p.gold += effect.value || 0;
+      resolvedLogs.push(`💰 +${effect.value}g`);
+    } else if (effect.type === "gainRelic") {
+      const [item] = addItemsToInventory(p, [generateRelic(p.level, s.effLuk, effect.rarity || "legendary")]);
+      if (item) resolvedLogs.push(`🧿 Relic: ${item.icon} ${item.rarityName} ${item.name}`);
+    } else if (effect.type === "removeTrait") {
+      if ((p.traits || []).length > 0) {
+        const removed = pick(p.traits);
+        p.traits = p.traits.filter(tr => tr.name !== removed.name);
+        resolvedLogs.push(`🧹 Removed trait: ${removed.name}`);
+      } else resolvedLogs.push("🧹 No traits to remove.");
+    } else if (effect.type === "gainSkillPoint") {
+      p.skillPoints += effect.value || 1;
+      resolvedLogs.push(`🧠 +${effect.value || 1} skill point`);
+    } else if (effect.type === "upgradeSkill") {
+      if ((p.skills || []).length > 0) {
+        const sk = pick(p.skills);
+        sk.level += effect.levels || 1;
+        sk.baseDmg = Math.round(sk.baseDmg * (1 + 0.12 * (effect.levels || 1)));
+        resolvedLogs.push(`📈 ${sk.name} upgraded to Lv.${sk.level}`);
+      } else resolvedLogs.push("📈 No skills available to upgrade.");
+    } else if (effect.type === "trainAllSkillsPct") {
+      p.skills.forEach(sk => { sk.xp += Math.round(sk.xpReq * ((effect.value || 0) / 100)); checkSkillLevelUp(sk, p); });
+      resolvedLogs.push(`📚 All skills gained ${effect.value}% XP`);
+    } else if (effect.type === "log") {
+      resolvedLogs.push(`ℹ️ ${effect.text}`);
+    }
+  }
+
+  function resolveEventOption(optionId){
+    const ev = eventData;
+    if(!ev)return;
+    const selected = ev.options.find(option => option.id === optionId);
+    if(!selected || selected.disabled)return;
+    setPlayer(prev=>{
+      const base=normalizePlayerState(prev);
+      const p={...base,statusEffects:[...base.statusEffects],inventory:base.inventory.map(i=>({...i})),skills:base.skills.map(s=>({...s})),passives:base.passives.map(ps=>({...ps})),traits:[...base.traits]};
+      const s=calcPlayerStats(p);
+      const branch = weightedPick((selected.outcomes || []).map((entry, index) => ({ ...entry, index, weight:entry.weight || 1 })));
+      const resolvedLogs = [];
+      (branch?.effects || []).forEach(effect => applyEventEffect(effect, p, s, resolvedLogs));
+      addLog(`🧭 Option: ${selected.label}`,"event");
+      addLog(`🎲 Branch #${(branch?.index ?? 0) + 1} resolved.`,"event");
+      resolvedLogs.forEach(msg => addLog(`   ${msg}`,"event"));
+      return p;
+    });
+    setEventData(null);
+    setPhase("explore");
+  }
+
+  function nextEncounter(nodeType = "combat"){
     if(!player)return;
-    const enc=encounter+1;setEncounter(enc);setPotionUsedThisTurn(false);setDefending(false);
-    if(enc%7===0){const boss=generateBoss(player.level,bossCount,bossHistory);setEnemy(boss);setPhase("boss_intro");addLog(`\n🔴 BOSS: ${boss.icon} ${boss.name}!`,"boss");addLog(`   ${boss.mechanicDesc}`,"boss");return;}
-    if(chance(30)&&enc%7!==1){triggerRandomEvent();return;}
+    const enc=encounter+1;setEncounter(enc);setPotionUsedThisTurn(false);setDefending(false);setMapNodes([]);
+    if(enc%7===0 || nodeType==="boss"){const boss=generateBoss(player.level,bossCount,bossHistory);setEnemy(boss);setPhase("boss_intro");addLog(`\n🔴 BOSS: ${boss.icon} ${boss.name}!`,"boss");addLog(`   ${boss.mechanicDesc}`,"boss");return;}
+    if(nodeType==="event"){triggerRandomEvent();return;}
+    if(nodeType==="merchant"){
+      setShopItems(Array.from({length:4},()=>generateItem(player.level,player.luk,null,{ setChanceBonus:12 })));
+      setShopConsumables(CONSUMABLES.slice(0,5).map(c=>({...c,id:uid(),qty:1})));
+      setPhase("shop");
+      addLog("\n🏪 A merchant route opens.","event");
+      return;
+    }
+    if(nodeType==="rest"){
+      setPlayer(prev=>{
+        const p=normalizePlayerState(prev);const s=calcPlayerStats(p);
+        const h=Math.round(s.maxHp*0.3),m=Math.round(s.maxMp*0.3);
+        return {...p,hp:Math.min(s.maxHp,p.hp+h),mp:Math.min(s.maxMp,p.mp+m)};
+      });
+      addLog("🏕️ Campfire: restored 30% HP/MP.","heal");
+      setPhase("explore");
+      return;
+    }
     const e=generateEnemy(player.level,floor);setEnemy(e);setCombatTurn(0);setParrying(false);setDefending(false);setBerserkTurns(0);setSmokeTurns(0);setShieldHp(0);setFamiliarHp(0);
     setSkillCooldowns(prev=>{const n={};Object.entries(prev).forEach(([k,v])=>{if(v>0)n[k]=v-1;});return n;});
     addLog(`\n⚡ ${e.isElite?"ELITE ":""}${e.icon} ${e.name} appears! [HP: ${e.hp}]`,e.isElite?"elite":"encounter");
     if(e.affixes?.length)addLog(`   Affixes: ${e.affixes.map(affix => ELITE_AFFIXES[affix].name).join(", ")}`,"elite");
     setPhase("combat");
-  }
-
-  function triggerRandomEvent(){
-    const events=[
-      {type:"shrine",name:"Ancient Shrine",desc:"A glowing shrine pulses with energy.",icon:"⛩️"},
-      {type:"chest",name:"Treasure Chest",desc:"A gilded chest sits in the corner.",icon:"📦"},
-      {type:"trap",name:"Trap Room",desc:"The floor clicks beneath your feet...",icon:"⚠️"},
-      {type:"merchant",name:"Wandering Merchant",desc:"A hooded figure offers their wares.",icon:"🏪"},
-      {type:"gamble",name:"Gambling Altar",desc:"Offer gold for a chance at greatness?",icon:"🎰"},
-      {type:"cursed",name:"Cursed Shrine",desc:"A dark shrine whispers promises of power...",icon:"💀"},
-      {type:"rest",name:"Safe Haven",desc:"A peaceful clearing. Rest and recover.",icon:"🏕️"},
-      {type:"training",name:"Training Grounds",desc:"Ancient dummies stand ready.",icon:"🎯"},
-      {type:"rare_treasure",name:"Rare Treasure Room",desc:"A hidden chamber shimmers with magical artifacts!",icon:"💎"},
-      {type:"library",name:"Mysterious Library",desc:"Ancient tomes pulse with arcane knowledge.",icon:"📚"},
-      {type:"forge",name:"Rune Forge",desc:"A forgotten forge can bind metal into a guaranteed set piece.",icon:"⚒️"},
-    ];
-    const ev=pick(events);setEventData(ev);addLog(`\n${ev.icon} ${ev.name}: ${ev.desc}`,"event");setPhase("event");
-  }
-
-  function handleEvent(choice){
-    const ev=eventData;
-    setPlayer(prev=>{
-      const base=normalizePlayerState(prev);
-      const p={...base,statusEffects:[...base.statusEffects],inventory:base.inventory.map(i=>({...i})),skills:base.skills.map(s=>({...s})),passives:base.passives.map(ps=>({...ps})),traits:[...base.traits]};
-      const s=calcPlayerStats(p);
-      if(ev.type==="shrine"&&choice==="yes"){
-        if(chance(60)){const stat=pick(["str","agi","int","vit","luk"]);p[stat]+=2;addLog(`✨ +2 ${stat.toUpperCase()}!`,"reward");}
-        else{const d=Math.round(s.maxHp*0.15);p.hp=Math.max(1,p.hp-d);addLog(`💥 Backfire! Lost ${d} HP.`,"damage");}
-      }else if(ev.type==="chest"){
-        const [item]=addItemsToInventory(p,[generateItem(p.level,s.effLuk)]);addLog(`📦 Found: ${item.icon} ${item.rarityName} ${item.name}!`,"loot");
-        if(chance(20)){const g=rng(10,30+p.level*5);p.gold+=g;addLog(`💰 +${g} gold!`,"gold");}
-      }else if(ev.type==="trap"){
-        const d=Math.round(s.maxHp*0.2);p.hp=Math.max(1,p.hp-d);addLog(`⚠️ Trap! ${d} damage.`,"damage");
-        if(chance(40)){const g=rng(5,20);p.gold+=g;addLog(`💰 Found ${g}g in the mechanism!`,"gold");}
-      }else if(ev.type==="merchant"){
-        setShopItems(Array.from({length:4},()=>generateItem(p.level,p.luk,null,{ setChanceBonus:12 })));
-        setShopConsumables(CONSUMABLES.slice(0,5).map(c=>({...c,id:uid(),qty:1})));
-        setPhase("shop");return p;
-      }else if(ev.type==="gamble"&&choice==="yes"){
-        const cost=Math.round(20+p.level*5);
-        if(p.gold>=cost){p.gold-=cost;if(chance(35+p.luk)){const [item]=addItemsToInventory(p,[generateItem(p.level,p.luk+10,chance(20)?"legendary":"epic")]);addLog(`🎰 JACKPOT! ${item.icon} ${item.rarityName} ${item.name}!`,"legendary");}else addLog("🎰 Nothing...","damage");}
-        else addLog("Not enough gold!","damage");
-      }else if(ev.type==="cursed"&&choice==="yes"){
-        const trait=pick(TRAITS.filter(t=>!p.traits.find(pt=>pt.name===t.name)));
-        if(trait){p.traits=[...p.traits,{...trait}];const hc=Math.round(s.maxHp*0.1);p.hp=Math.max(1,p.hp-hc);addLog(`💀 Gained: ${trait.name} — ${trait.desc}. Lost ${hc} HP.`,"trait");}
-        else addLog("Nothing to offer.","info");
-      }else if(ev.type==="rest"){
-        const h=Math.round(s.maxHp*0.4),m=Math.round(s.maxMp*0.5);p.hp=Math.min(s.maxHp,p.hp+h);p.mp=Math.min(s.maxMp,p.mp+m);addLog(`🏕️ +${h} HP, +${m} MP.`,"heal");
-      }else if(ev.type==="training"){
-        if(p.skills.length>0){const sk=pick(p.skills);sk.xp+=Math.round(sk.xpReq*0.5);addLog(`🎯 Trained ${sk.name}!`,"reward");checkSkillLevelUp(sk,p);}
-      }else if(ev.type==="rare_treasure"){
-        const [item1,item2]=addItemsToInventory(p,[generateItem(p.level,s.effLuk+5),generateItem(p.level,s.effLuk+5)]);
-        addLog(`💎 Found: ${item1.icon} ${item1.rarityName} ${item1.name}!`,"loot");
-        addLog(`💎 Found: ${item2.icon} ${item2.rarityName} ${item2.name}!`,"loot");
-        if(chance(40)){const stat=pick(["str","agi","int","vit","luk"]);p[stat]+=1;addLog(`✨ +1 ${stat.toUpperCase()} from ancient power!`,"reward");}
-      }else if(ev.type==="library"){
-        p.skills.forEach(sk=>{sk.xp+=Math.round(sk.xpReq*0.5);checkSkillLevelUp(sk,p);});
-        addLog("📚 All skills gained training XP!","reward");
-      }else if(ev.type==="forge"){
-        const [item]=addItemsToInventory(p,[generateItem(p.level,s.effLuk+4,null,{ forceSet:true, setChanceBonus:25 })]);
-        addLog(`⚒️ Forged: ${item.icon} ${item.rarityName} ${item.name}!`,"legendary");
-        if(chance(35)){const gold=rng(12,28+p.level*4);p.gold+=gold;addLog(`💰 Scrap refund: +${gold} gold!`,"gold");}
-      }
-      return p;
-    });
-    if(ev.type!=="merchant")setPhase("explore");
   }
 
   function checkSkillLevelUp(sk,p){
@@ -970,6 +1120,7 @@ export default function Game(){
 
   // ─── RENDER ────────────────────────────────────────────────
   const lc={system:"#7dd3fc",narrative:"#a78bfa",encounter:"#fb923c",elite:"#f87171",combat:"#e2e8f0",crit:"#fbbf24",damage:"#ef4444",heal:"#4ade80",dodge:"#67e8f9",status:"#c084fc",buff:"#60a5fa",boss:"#f43f5e",victory:"#22c55e",reward:"#a3e635",loot:"#38bdf8",legendary:"#fbbf24",gold:"#fbbf24",levelup:"#c084fc",death:"#ef4444",event:"#f0abfc",trait:"#fcd34d",info:"#94a3b8"};
+  const currentBiome = getBiomeForFloor(floor);
   const STATUS_ICONS={burn:"🔥",bleed:"🩸",freeze:"❄️",stun:"⚡",poison:"🟢"};
 
   if(phase==="menu")return(
@@ -1020,7 +1171,7 @@ export default function Game(){
       {/* ─── HEADER ─── */}
       <div style={{background:"#0f0f1a",borderBottom:"1px solid #1e1e3a",padding:"8px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}><span style={{fontSize:18}}>⚔️</span><span style={{fontWeight:700}}>{player.name}</span><span style={{color:"#7c3aed",fontSize:13,fontWeight:600}}>Lv.{player.level}</span></div>
-        <div style={{display:"flex",gap:16,fontSize:12,color:"#94a3b8"}}><span>Floor {floor}</span><span>🏆 {player.kills}</span><span>💰 {player.gold}</span>{player.statPoints>0&&<span style={{color:"#fbbf24",fontWeight:700}}>⬆ {player.statPoints} SP</span>}</div>
+        <div style={{display:"flex",gap:16,fontSize:12,color:"#94a3b8"}}><span>Floor {floor} · {currentBiome.name}</span><span>🏆 {player.kills}</span><span>💰 {player.gold}</span>{player.statPoints>0&&<span style={{color:"#fbbf24",fontWeight:700}}>⬆ {player.statPoints} SP</span>}</div>
       </div>
 
       {/* ─── TOP BARS ─── */}
@@ -1188,7 +1339,15 @@ export default function Game(){
             </div>
             <div style={{padding:16,background:"#0f0f1a",borderTop:"1px solid #1e1e3a",display:"flex",flexDirection:"column",gap:8}}>
               {player.statPoints>0&&<button onClick={()=>setPhase("stats")} style={btn("#854d0e")}>⬆ Allocate {player.statPoints} Stat Points</button>}
-              <button onClick={nextEncounter} style={btn("#7c3aed")}>⚡ Encounter {encounter+1}{((encounter+1)%7===0)?" — BOSS!":""}</button>
+              <div style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>Next Node</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:8}}>
+                {mapNodes.map(node=>(
+                  <button key={node.id} onClick={()=>nextEncounter(node.type)} style={{...btn(node.type==="boss"?"#991b1b":node.type==="event"?"#6d28d9":node.type==="merchant"?"#166534":node.type==="rest"?"#0f766e":"#334155",true),textAlign:"left"}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{node.icon} {node.label}</div>
+                    <div style={{fontSize:10,color:"#cbd5e1",opacity:0.85,marginTop:2}}>{node.preview}</div>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>)}
 
@@ -1197,18 +1356,16 @@ export default function Game(){
           <div style={{flex:1,padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
             <div style={{fontSize:64,marginBottom:16,animation:"scaleIn 0.4s ease-out"}}>{eventData.icon}</div>
             <h3 style={{fontSize:20,fontWeight:800,color:"#c084fc",marginBottom:8}}>{eventData.name}</h3>
-            <p style={{color:"#94a3b8",marginBottom:24,maxWidth:360}}>{eventData.desc}</p>
-            {eventData.type==="shrine"&&<div style={{display:"flex",gap:12}}><button onClick={()=>handleEvent("yes")} style={btn("#7c3aed")}>Touch</button><button onClick={()=>setPhase("explore")} style={btn("#374151")}>Leave</button></div>}
-            {eventData.type==="chest"&&<button onClick={()=>handleEvent()} style={btn("#d97706")}>Open</button>}
-            {eventData.type==="trap"&&<button onClick={()=>handleEvent()} style={btn("#ef4444")}>Brace</button>}
-            {eventData.type==="merchant"&&<button onClick={()=>handleEvent()} style={btn("#22c55e")}>Browse</button>}
-            {eventData.type==="gamble"&&<div style={{display:"flex",gap:12}}><button onClick={()=>handleEvent("yes")} style={btn("#d97706")}>Gamble ({Math.round(20+player.level*5)}g)</button><button onClick={()=>setPhase("explore")} style={btn("#374151")}>Leave</button></div>}
-            {eventData.type==="cursed"&&<div style={{display:"flex",gap:12}}><button onClick={()=>handleEvent("yes")} style={btn("#ef4444")}>Accept</button><button onClick={()=>setPhase("explore")} style={btn("#374151")}>Refuse</button></div>}
-            {eventData.type==="rest"&&<button onClick={()=>handleEvent()} style={btn("#22c55e")}>Rest</button>}
-            {eventData.type==="training"&&<button onClick={()=>handleEvent()} style={btn("#3b82f6")}>Train</button>}
-            {eventData.type==="rare_treasure"&&<button onClick={()=>handleEvent()} style={btn("#fbbf24")}>Open Chamber</button>}
-            {eventData.type==="library"&&<button onClick={()=>handleEvent()} style={btn("#3b82f6")}>Study Texts</button>}
-            {eventData.type==="forge"&&<button onClick={()=>handleEvent()} style={btn("#ea580c")}>Forge Set Item</button>}
+            <p style={{color:"#94a3b8",marginBottom:20,maxWidth:420}}>{eventData.desc}</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10,width:"100%",maxWidth:560}}>
+              {eventData.options.map(option=>(
+                <button key={option.id} onClick={()=>resolveEventOption(option.id)} disabled={option.disabled} style={{...btn(option.disabled?"#1f2937":"#312e81",true),opacity:option.disabled?0.45:1,textAlign:"left",minHeight:78}}>
+                  <div style={{fontWeight:800,fontSize:13}}>{option.label}</div>
+                  <div style={{fontSize:11,color:"#cbd5e1",marginTop:4}}>{option.preview}</div>
+                  {option.disabled&&<div style={{fontSize:10,color:"#fca5a5",marginTop:4}}>Requirements not met</div>}
+                </button>
+              ))}
+            </div>
           </div>)}
 
         {/* ═══ SHOP ═══ */}
